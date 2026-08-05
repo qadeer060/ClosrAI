@@ -600,3 +600,6 @@ if __name__ == "__main__":
     port  = int(os.getenv("PORT", 5002))
     debug = os.getenv("FLASK_DEBUG", "true").lower() == "true"
     app.run(host="0.0.0.0", port=port, debug=debug)
+    port  = int(os.getenv("PORT", 5002))
+    debug = os.getenv("FLASK_DEBUG", "true").lower() == "true"
+    app.run(host="0.0.0.0", port=port, debug=debug)
