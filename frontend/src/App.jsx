@@ -1235,6 +1235,3 @@ function Styles() {
     `}</style>
   );
 }
-    `}</style>
-  );
-}
