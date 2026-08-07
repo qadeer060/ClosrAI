@@ -4,6 +4,7 @@ import {
   AlertCircle, Copy, Crown, DollarSign, Calendar, MessageSquare,
   Clock, CheckCircle, ChevronDown, ChevronRight, LogOut,
   Loader2, Sparkles, History, Target, TrendingUp, Star, RotateCcw,
+  ClipboardCheck,
 } from "lucide-react";
 
 /* ---------------------------------------------------------------
@@ -216,6 +217,7 @@ function ToolScreen({ account, setAccount, onLogout }) {
   const [menuOpen,    setMenuOpen]    = useState(false);
   const [showPricing, setShowPricing] = useState(false);
   const [analyses,    setAnalyses]    = useState([]);
+  const [checkins,    setCheckins]    = useState([]);
   const [current,     setCurrent]     = useState(null);
   const [generating,  setGenerating]  = useState(false);
   const [apiErr,      setApiErr]      = useState("");
@@ -228,11 +230,16 @@ function ToolScreen({ account, setAccount, onLogout }) {
 
   const plan = PLANS[account.plan] || PLANS.free;
 
-  useEffect(() => { loadAnalyses(); }, []);
+  useEffect(() => { loadAnalyses(); loadCheckins(); }, []);
 
   async function loadAnalyses() {
     const r = await apiFetch("/api/analyses");
     if (r.ok) { const d = await r.json(); setAnalyses(d.analyses); }
+  }
+
+  async function loadCheckins() {
+    const r = await apiFetch("/api/checkins");
+    if (r.ok) { const d = await r.json(); setCheckins(d.checkins); }
   }
 
   function setImage(idx, file) {
@@ -317,6 +324,9 @@ function ToolScreen({ account, setAccount, onLogout }) {
         </button>
         <button className={"main-tab"+(tab==="results"?" main-tab-on":"")} onClick={()=>setTab("results")} type="button">
           <Sparkles size={13}/> Results {current && <span className="new-dot"/>}
+        </button>
+        <button className={"main-tab"+(tab==="checkin"?" main-tab-on":"")} onClick={()=>setTab("checkin")} type="button">
+          <ClipboardCheck size={13}/> Check-in <span className="badge">{checkins.length}</span>
         </button>
         <button className={"main-tab"+(tab==="history"?" main-tab-on":"")} onClick={()=>setTab("history")} type="button">
           <History size={13}/> History <span className="badge">{analyses.length}</span>
@@ -455,6 +465,15 @@ function ToolScreen({ account, setAccount, onLogout }) {
             <ResultsView analysis={current} plan={plan} onUpgrade={()=>setShowPricing(true)} onReset={()=>{resetForm();setTab("analyse");}}/>
           )}
         </div>
+      )}
+
+      {/* Check-in tab */}
+      {tab === "checkin" && (
+        <CheckinTab
+          analyses={analyses}
+          checkins={checkins}
+          onCheckinAdded={(c) => setCheckins(prev => [c, ...prev])}
+        />
       )}
 
       {/* History tab */}
@@ -679,6 +698,253 @@ function PricingModal({ currentPlan, onSelect, onClose }) {
           })}
         </div>
       </div>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------
+   Check-in Tab
+--------------------------------------------------------------- */
+function CheckinTab({ analyses, checkins, onCheckinAdded }) {
+  const [view,          setView]         = useState("form");
+  const [analysisId,    setAnalysisId]   = useState("");
+  const [weekNumber,    setWeekNumber]   = useState("");
+  const [whatPosted,    setWhatPosted]   = useState("");
+  const [whatPerformed, setWhatPerformed]= useState("");
+  const [dmsReplies,    setDmsReplies]   = useState("");
+  const [submitting,    setSubmitting]   = useState(false);
+  const [result,        setResult]       = useState(null);
+  const [apiErr,        setApiErr]       = useState("");
+  const [expandedId,    setExpandedId]   = useState(null);
+  const [copiedDebrief, setCopiedDebrief]= useState(false);
+
+  async function submit() {
+    if (!whatPosted.trim())    { setApiErr("Tell us what you posted this week."); return; }
+    if (!whatPerformed.trim()) { setApiErr("Tell us what performed best."); return; }
+    if (!dmsReplies.trim())    { setApiErr("Tell us about DMs or replies (write 'none' if you got none)."); return; }
+    setApiErr(""); setSubmitting(true); setResult(null);
+    const body = { what_posted: whatPosted.trim(), what_performed: whatPerformed.trim(), dms_replies: dmsReplies.trim() };
+    if (analysisId) body.analysis_id = parseInt(analysisId);
+    if (weekNumber) body.week_number  = parseInt(weekNumber);
+    try {
+      const res  = await apiFetch("/api/checkin", { method: "POST", body: JSON.stringify(body) });
+      const data = await res.json();
+      if (!res.ok) { setApiErr(data.error || "Check-in failed."); return; }
+      setResult(data);
+      onCheckinAdded(data.checkin);
+    } catch { setApiErr("Cannot reach the server."); }
+    finally   { setSubmitting(false); }
+  }
+
+  function reset() {
+    setResult(null); setWhatPosted(""); setWhatPerformed(""); setDmsReplies("");
+    setAnalysisId(""); setWeekNumber(""); setApiErr("");
+  }
+
+  function copyDebrief() {
+    if (!result) return;
+    navigator.clipboard.writeText(result.checkin.debrief);
+    setCopiedDebrief(true);
+    setTimeout(() => setCopiedDebrief(false), 2000);
+  }
+
+  const adjustedWeeks = result?.checkin?.adjusted_weeks;
+
+  return (
+    <div className="checkin-wrap">
+      <div className="checkin-subtabs">
+        <button className={"ci-stab"+(view==="form"?" ci-stab-on":"")} onClick={()=>setView("form")} type="button">
+          <ClipboardCheck size={12}/> New check-in
+        </button>
+        <button className={"ci-stab"+(view==="history"?" ci-stab-on":"")} onClick={()=>setView("history")} type="button">
+          <History size={12}/> Past check-ins <span className="badge">{checkins.length}</span>
+        </button>
+      </div>
+
+      {view === "form" && (
+        <div className="checkin-grid">
+          <div className="checkin-form">
+            {!result ? (
+              <>
+                <div className="section-label">LINK TO A PLAN <span className="label-sub">optional</span></div>
+                <div className="ci-row">
+                  <label className="field" style={{flex:1}}>
+                    <span className="field-label">Analysis / 30-day plan</span>
+                    <div className="field-wrap">
+                      <select className="input ci-select" value={analysisId} onChange={e=>setAnalysisId(e.target.value)}>
+                        <option value="">Standalone (not tied to a plan)</option>
+                        {analyses.filter(a=>a.playbook).map(a=>(
+                          <option key={a.id} value={a.id}>{a.platform} · {a.niche||"No niche"} · {new Date(a.created_at).toLocaleDateString()}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </label>
+                  {analysisId && (
+                    <label className="field" style={{width:110}}>
+                      <span className="field-label">Week</span>
+                      <div className="field-wrap">
+                        <select className="input ci-select" value={weekNumber} onChange={e=>setWeekNumber(e.target.value)}>
+                          <option value="">—</option>
+                          <option value="1">Week 1</option>
+                          <option value="2">Week 2</option>
+                          <option value="3">Week 3</option>
+                          <option value="4">Week 4</option>
+                        </select>
+                      </div>
+                    </label>
+                  )}
+                </div>
+
+                <div className="section-label" style={{marginTop:16}}>THIS WEEK'S DATA</div>
+
+                <label className="field">
+                  <span className="field-label">What did you post? <span style={{color:"var(--fog)"}}>— list each piece of content</span></span>
+                  <div className="field-wrap field-wrap-tall">
+                    <textarea className="input input-textarea" rows={3} value={whatPosted} onChange={e=>setWhatPosted(e.target.value)}
+                      placeholder="e.g. 3 reels about meal prep, 1 carousel on morning routines, 2 Stories with polls"/>
+                  </div>
+                </label>
+
+                <label className="field">
+                  <span className="field-label">What performed best? <span style={{color:"var(--fog)"}}>— views, saves, comments, shares</span></span>
+                  <div className="field-wrap field-wrap-tall">
+                    <textarea className="input input-textarea" rows={3} value={whatPerformed} onChange={e=>setWhatPerformed(e.target.value)}
+                      placeholder="e.g. The meal prep reel got 12k views vs my usual 2k — tons of saves and people tagging friends"/>
+                  </div>
+                </label>
+
+                <label className="field">
+                  <span className="field-label">DMs and replies you got <span style={{color:"var(--fog)"}}>— write 'none' if zero</span></span>
+                  <div className="field-wrap field-wrap-tall">
+                    <textarea className="input input-textarea" rows={3} value={dmsReplies} onChange={e=>setDmsReplies(e.target.value)}
+                      placeholder="e.g. 4 DMs asking if I have a meal plan PDF, 2 comments asking about coaching, 1 asking for pricing"/>
+                  </div>
+                </label>
+
+                {apiErr && <div className="banner err-banner"><AlertCircle size={13}/> {apiErr}</div>}
+
+                <button className="btn btn-primary btn-full" onClick={submit} disabled={submitting} type="button">
+                  {submitting ? <Loader2 size={14} className="spin"/> : <ClipboardCheck size={14}/>}
+                  {submitting ? "Analysing your week…" : "Get my weekly debrief"}
+                </button>
+              </>
+            ) : (
+              <div className="ci-result">
+                <div className="ci-result-head">
+                  <div>
+                    <div className="section-label">WEEK {result.checkin.week_number||"—"} DEBRIEF</div>
+                    {result.analysis && <div className="ci-linked-tag">{result.analysis.platform} · {result.analysis.niche}</div>}
+                  </div>
+                  <div style={{display:"flex",gap:8}}>
+                    <button className="btn btn-ghost btn-sm" onClick={copyDebrief} type="button">
+                      {copiedDebrief ? <><Check size={12}/> Copied!</> : <><Copy size={12}/> Copy</>}
+                    </button>
+                    <button className="btn btn-ghost btn-sm" onClick={reset} type="button"><RotateCcw size={12}/> New</button>
+                  </div>
+                </div>
+                <div className="ci-debrief-box">
+                  <p className="ci-debrief-text">{result.checkin.debrief}</p>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="checkin-output">
+            {!result && (
+              <div className="ci-explainer">
+                <div className="section-label">WHAT YOU'LL GET</div>
+                <div className="ci-explainer-cards">
+                  {[
+                    {icon:"📊", color:"var(--teal)",   title:"Weekly debrief",   desc:"What your data actually means, what to double down on, and what to stop — specific to your numbers."},
+                    {icon:"📅", color:"var(--amber)",  title:"Adjusted plan",    desc:"If linked to a 30-day plan, ClosrAI rewrites the remaining weeks based on what's actually working."},
+                    {icon:"💬", color:"var(--violet)", title:"DM action items",  desc:"If people are DMing you, ClosrAI flags the buying signals and tells you exactly how to respond."},
+                  ].map(({icon,color,title,desc})=>(
+                    <div key={title} className="ci-explainer-card">
+                      <div className="ci-ec-icon" style={{color}}>{icon}</div>
+                      <div><div className="ci-ec-title">{title}</div><div className="ci-ec-desc">{desc}</div></div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {result && adjustedWeeks && (
+              <div className="ci-adjusted">
+                <div className="section-label">ADJUSTED REMAINING PLAN</div>
+                <p className="ci-adj-sub">Updated based on what's working for your account this week.</p>
+                {Object.entries(adjustedWeeks).map(([weekKey, weekData]) => (
+                  <div key={weekKey} className="ci-week-card">
+                    <div className="ci-week-header" onClick={()=>setExpandedId(expandedId===weekKey?null:weekKey)}>
+                      <div>
+                        <div className="ci-week-name">{weekKey.replace("week","Week ")}</div>
+                        <div className="ci-week-theme">{weekData.theme}</div>
+                      </div>
+                      <ChevronRight size={13} className={"chevron"+(expandedId===weekKey?" rotated":"")} color="#475569"/>
+                    </div>
+                    {expandedId === weekKey && (
+                      <div className="ci-week-body">
+                        <div className="ci-week-goal">{weekData.goal}</div>
+                        {weekData.posts?.map((post, i) => (
+                          <div key={i} className="ci-post-row">
+                            <span className="wp-day">Day {post.day}</span>
+                            <span className="wp-format-badge">{post.format}</span>
+                            <div><div className="wp-hook">"{post.hook}"</div><div className="wp-purpose">{post.purpose}</div></div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {result && !adjustedWeeks && (
+              <div className="empty-state" style={{minHeight:240}}>
+                <div className="empty-icon"><Calendar size={24}/></div>
+                <p>Link a 30-day plan and select a week number to get an adjusted content plan based on your results.</p>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {view === "history" && (
+        <div className="ci-history">
+          {checkins.length === 0 ? (
+            <div className="empty-state" style={{margin:"60px auto"}}>
+              <div className="empty-icon"><ClipboardCheck size={26}/></div>
+              <p>No check-ins yet. Submit your first weekly check-in to see it here.</p>
+            </div>
+          ) : (
+            <div className="ci-history-list">
+              {checkins.map(ci => (
+                <div key={ci.id} className="ci-history-card" onClick={()=>setExpandedId(expandedId===ci.id?null:ci.id)}>
+                  <div className="ci-hc-head">
+                    <div>
+                      <div className="ci-hc-title">{ci.week_number ? `Week ${ci.week_number} check-in` : "Standalone check-in"}</div>
+                      <div className="ci-hc-date">{new Date(ci.created_at).toLocaleDateString()}</div>
+                    </div>
+                    <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                      {ci.adjusted_weeks && <span className="hc-playbook-badge"><Sparkles size={10}/> Plan adjusted</span>}
+                      <ChevronRight size={13} className={"chevron"+(expandedId===ci.id?" rotated":"")} color="#475569"/>
+                    </div>
+                  </div>
+                  {expandedId === ci.id && (
+                    <div className="ci-hc-body">
+                      <div className="ci-hc-section-label">Debrief</div>
+                      <p className="ci-debrief-text">{ci.debrief}</p>
+                      <div className="ci-hc-section-label" style={{marginTop:12}}>What you posted</div>
+                      <p className="ci-hc-data">{ci.what_posted}</p>
+                      <div className="ci-hc-section-label" style={{marginTop:8}}>What performed</div>
+                      <p className="ci-hc-data">{ci.what_performed}</p>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -912,16 +1178,63 @@ function Styles() {
       .plan-features{display:flex;flex-direction:column;gap:7px;margin:4px 0;}
       .pf-item{display:flex;align-items:center;gap:7px;font-size:13px;color:var(--slate);}
 
+      /* ---- Check-in tab ---- */
+      .checkin-wrap{padding:28px;flex:1;}
+      .checkin-subtabs{display:flex;gap:4px;margin-bottom:22px;background:var(--black);border-radius:10px;padding:4px;max-width:320px;}
+      .ci-stab{display:flex;align-items:center;gap:6px;flex:1;background:none;border:none;color:var(--fog);font-family:'Inter';font-size:13px;font-weight:600;padding:9px 12px;border-radius:7px;cursor:pointer;}
+      .ci-stab-on{background:var(--card);color:var(--bone);}
+      .checkin-grid{display:grid;grid-template-columns:1fr 1fr;gap:32px;align-items:start;}
+      .checkin-form{display:flex;flex-direction:column;gap:14px;}
+      .checkin-output{display:flex;flex-direction:column;gap:14px;}
+      .ci-row{display:flex;gap:10px;align-items:flex-start;}
+      .ci-select{background:none;border:none;color:var(--bone);font-family:'Inter';font-size:14px;padding:10px 4px;outline:none;width:100%;cursor:pointer;}
+      .ci-select option{background:var(--card);color:var(--bone);}
+      .ci-result{display:flex;flex-direction:column;gap:14px;}
+      .ci-result-head{display:flex;justify-content:space-between;align-items:flex-start;}
+      .ci-linked-tag{font-size:12px;color:var(--fog);margin-top:4px;}
+      .ci-debrief-box{background:var(--card);border:1px solid var(--line);border-left:3px solid var(--teal);border-radius:12px;padding:18px;}
+      .ci-debrief-text{font-size:13.5px;color:var(--slate);line-height:1.75;white-space:pre-wrap;}
+      .ci-explainer{display:flex;flex-direction:column;gap:14px;}
+      .ci-explainer-cards{display:flex;flex-direction:column;gap:10px;}
+      .ci-explainer-card{display:flex;align-items:flex-start;gap:14px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;}
+      .ci-ec-icon{font-size:22px;flex-shrink:0;}
+      .ci-ec-title{font-weight:600;font-size:14px;color:var(--bone);margin-bottom:4px;}
+      .ci-ec-desc{font-size:12.5px;color:var(--fog);line-height:1.55;}
+      .ci-adjusted{display:flex;flex-direction:column;gap:10px;}
+      .ci-adj-sub{font-size:13px;color:var(--fog);}
+      .ci-week-card{background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:hidden;}
+      .ci-week-header{display:flex;justify-content:space-between;align-items:center;padding:13px 16px;cursor:pointer;}
+      .ci-week-header:hover{background:rgba(255,255,255,.02);}
+      .ci-week-name{font-size:11px;font-weight:700;color:var(--teal);text-transform:uppercase;letter-spacing:.06em;}
+      .ci-week-theme{font-size:14px;font-weight:600;color:var(--bone);margin-top:2px;}
+      .ci-week-body{padding:0 16px 14px;border-top:1px solid var(--line);}
+      .ci-week-goal{font-size:12.5px;color:var(--teal);padding:10px 0 8px;}
+      .ci-post-row{display:grid;grid-template-columns:52px 80px 1fr;gap:8px;align-items:start;padding:8px 0;border-top:1px solid var(--line);}
+      .ci-history{max-width:700px;margin:0 auto;width:100%;}
+      .ci-history-list{display:flex;flex-direction:column;gap:9px;}
+      .ci-history-card{background:var(--card);border:1px solid var(--line);border-radius:12px;overflow:hidden;cursor:pointer;}
+      .ci-hc-head{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;}
+      .ci-hc-head:hover{background:rgba(255,255,255,.02);}
+      .ci-hc-title{font-weight:600;font-size:14px;color:var(--bone);}
+      .ci-hc-date{font-size:12px;color:var(--fog);margin-top:2px;}
+      .ci-hc-body{padding:0 18px 16px;border-top:1px solid var(--line);}
+      .ci-hc-section-label{font-size:10.5px;font-weight:700;color:var(--teal);text-transform:uppercase;letter-spacing:.06em;margin-top:12px;margin-bottom:5px;}
+      .ci-hc-data{font-size:13px;color:var(--slate);line-height:1.55;}
+
       @media(max-width:820px){
         .auth-wrap{grid-template-columns:1fr;}
         .auth-left{display:none;}
         .analyse-grid{grid-template-columns:1fr;}
+        .checkin-grid{grid-template-columns:1fr;}
         .plan-grid{grid-template-columns:1fr;}
         .week-post{grid-template-columns:48px 1fr;}
         .topbar{padding:12px 16px;flex-wrap:wrap;gap:8px;}
-        .results-wrap,.analyse-wrap,.history-wrap{padding:18px;}
+        .results-wrap,.analyse-wrap,.history-wrap,.checkin-wrap{padding:18px;}
         .img-upload-grid{grid-template-columns:repeat(3,1fr);}
       }
+    `}</style>
+  );
+}
     `}</style>
   );
 }
