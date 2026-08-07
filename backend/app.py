@@ -131,19 +131,48 @@ class Analysis(db.Model):
     platform         = db.Column(db.String(40),  nullable=False)
     niche            = db.Column(db.String(300), nullable=True)
     image_count      = db.Column(db.Integer,     default=1)
-    opportunities    = db.Column(db.Text,        nullable=False)  # JSON array of 3 opportunities
-    playbook         = db.Column(db.Text,        nullable=True)   # JSON — only for pro/studio
+    opportunities    = db.Column(db.Text,        nullable=False)
+    playbook         = db.Column(db.Text,        nullable=True)
     created_at       = db.Column(db.DateTime,    default=lambda: datetime.now(timezone.utc))
+    checkins         = db.relationship("Checkin", backref="analysis", lazy=True, cascade="all, delete-orphan")
 
     def to_dict(self):
         return {
-            "id":           self.id,
-            "platform":     self.platform,
-            "niche":        self.niche,
-            "image_count":  self.image_count,
+            "id":            self.id,
+            "platform":      self.platform,
+            "niche":         self.niche,
+            "image_count":   self.image_count,
             "opportunities": json.loads(self.opportunities) if self.opportunities else [],
             "playbook":      json.loads(self.playbook)      if self.playbook      else None,
-            "created_at":   self.created_at.isoformat(),
+            "checkins":      [c.to_dict() for c in self.checkins],
+            "created_at":    self.created_at.isoformat(),
+        }
+
+
+class Checkin(db.Model):
+    __tablename__    = "checkins"
+    id               = db.Column(db.Integer,  primary_key=True)
+    user_id          = db.Column(db.Integer,  db.ForeignKey("users.id"), nullable=False)
+    analysis_id      = db.Column(db.Integer,  db.ForeignKey("analyses.id"), nullable=True)  # None = standalone
+    week_number      = db.Column(db.Integer,  nullable=True)   # 1-4 if tied to plan
+    what_posted      = db.Column(db.Text,     nullable=False)
+    what_performed   = db.Column(db.Text,     nullable=False)
+    dms_replies      = db.Column(db.Text,     nullable=False)
+    debrief          = db.Column(db.Text,     nullable=False)   # AI written summary + insights
+    adjusted_weeks   = db.Column(db.Text,     nullable=True)    # JSON — adjusted remaining plan weeks
+    created_at       = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+    def to_dict(self):
+        return {
+            "id":             self.id,
+            "analysis_id":    self.analysis_id,
+            "week_number":    self.week_number,
+            "what_posted":    self.what_posted,
+            "what_performed": self.what_performed,
+            "dms_replies":    self.dms_replies,
+            "debrief":        self.debrief,
+            "adjusted_weeks": json.loads(self.adjusted_weeks) if self.adjusted_weeks else None,
+            "created_at":     self.created_at.isoformat(),
         }
 
 # ---------------------------------------------------------------------------
@@ -566,6 +595,215 @@ def get_analysis(aid):
     return jsonify({"analysis": a.to_dict()})
 
 # ---------------------------------------------------------------------------
+# Check-in routes
+# ---------------------------------------------------------------------------
+DEBRIEF_PROMPT = """You are a creator monetisation coach reviewing a creator's weekly progress.
+
+Platform: {platform}
+Niche: {niche}
+Week {week_number} check-in:
+
+WHAT THEY POSTED THIS WEEK:
+{what_posted}
+
+WHAT PERFORMED BEST:
+{what_performed}
+
+DMs AND REPLIES THEY GOT:
+{dms_replies}
+
+{plan_context}
+
+Write a SHORT, direct weekly debrief (200-250 words) that:
+1. Calls out the most important insight from what they shared — what does the performance data actually tell you?
+2. Identifies the ONE thing they should double down on next week based on what worked
+3. Flags ONE thing they should stop or change based on what didn't land
+4. Notes anything in the DMs/replies that signals buying intent they should act on immediately
+
+Be specific and direct. No generic advice. Reference exactly what they told you.
+Write as a coach who has read their data carefully, not a template response."""
+
+
+PLAN_ADJUSTMENT_PROMPT = """You are adjusting a creator's 30-day content plan based on their weekly check-in data.
+
+Platform: {platform}
+Niche: {niche}
+Completed through: Week {week_number}
+
+WHAT THEY POSTED THIS WEEK:
+{what_posted}
+
+WHAT PERFORMED BEST:
+{what_performed}
+
+DMs AND REPLIES THEY GOT:
+{dms_replies}
+
+REMAINING WEEKS OF THEIR ORIGINAL PLAN:
+{remaining_weeks}
+
+Based on what's actually working and what isn't, adjust the remaining weeks.
+If certain content types are outperforming, lean into them more.
+If the audience is already showing buying signals (in DMs/replies), accelerate the launch timeline.
+If engagement is low, add more trust-building content before pitching.
+
+Respond with ONLY a valid JSON object of the adjusted remaining weeks. Same structure as the original.
+No markdown, no explanation, just raw JSON:
+
+{{
+  "week{next_week}": {{
+    "theme": "...",
+    "goal": "...",
+    "posts": [
+      {{"day": X, "format": "...", "hook": "...", "purpose": "..."}}
+    ]
+  }}
+}}"""
+
+
+def demo_debrief(what_performed, dms_replies, week_number):
+    has_dms = len(dms_replies.strip()) > 20
+    return (
+        f"Week {week_number} debrief:\n\n"
+        f"The standout signal this week is what you shared about performance — "
+        f"'{what_performed[:80]}...' — this tells you your audience responds well to that format. "
+        f"That's not a coincidence, that's a pattern worth repeating.\n\n"
+        f"Double down on that exact approach next week. More of what worked, "
+        f"less experimenting. Consistency in what's already landing is how you build momentum.\n\n"
+        + (f"The DMs and replies you're getting are important — '{dms_replies[:80]}...' — "
+           f"that's buying intent. Don't let those conversations go cold. "
+           f"Respond personally and move them toward the next step.\n\n"
+           if has_dms else
+           f"DM activity is low this week — that's a signal to add a clearer call to action "
+           f"in your captions. Not a hard sell, just a question that invites a reply.\n\n")
+        + f"Next week: lead with your best-performing format, add one direct call to action per post, "
+        f"and follow up personally with anyone who DM'd this week."
+    )
+
+
+@app.route("/api/checkin", methods=["POST"])
+@jwt_required()
+@limiter.limit("20 per hour")
+def create_checkin():
+    user = get_user()
+    if not user: return jsonify({"error": "Not found."}), 404
+
+    data            = request.get_json(silent=True) or {}
+    analysis_id     = data.get("analysis_id")   # optional
+    week_number     = data.get("week_number")   # optional int 1-4
+    what_posted     = (data.get("what_posted")     or "").strip()
+    what_performed  = (data.get("what_performed")  or "").strip()
+    dms_replies     = (data.get("dms_replies")     or "").strip()
+
+    if not what_posted:    return jsonify({"error": "Tell us what you posted this week."}), 400
+    if not what_performed: return jsonify({"error": "Tell us what performed best."}), 400
+    if not dms_replies:    return jsonify({"error": "Tell us about any DMs or replies (write 'none' if you got none)."}), 400
+
+    # Load linked analysis if provided
+    analysis = None
+    if analysis_id:
+        analysis = Analysis.query.filter_by(id=analysis_id, user_id=user.id).first()
+
+    platform = analysis.platform if analysis else "Instagram"
+    niche    = analysis.niche    if analysis else "general creator"
+    playbook = json.loads(analysis.playbook) if (analysis and analysis.playbook) else None
+
+    # Determine remaining weeks for adjustment
+    remaining_weeks = {}
+    next_week = None
+    if playbook and week_number:
+        all_weeks = ["week1","week2","week3","week4"]
+        done      = f"week{week_number}"
+        remaining = [w for w in all_weeks if w > done]
+        remaining_weeks = {w: playbook[w] for w in remaining if w in playbook}
+        next_week = week_number + 1 if week_number < 4 else None
+
+    # Plan context for debrief prompt
+    plan_context = ""
+    if playbook and week_number:
+        plan_context = f"They are on week {week_number} of a 30-day monetisation plan targeting: {playbook.get('week'+str(week_number),{}).get('theme','')}"
+
+    try:
+        if GEMINI_KEY:
+            # Generate debrief
+            debrief_prompt = DEBRIEF_PROMPT.format(
+                platform       = platform,
+                niche          = niche,
+                week_number    = week_number or "N/A",
+                what_posted    = what_posted,
+                what_performed = what_performed,
+                dms_replies    = dms_replies,
+                plan_context   = plan_context,
+            )
+            debrief = call_gemini([], debrief_prompt)
+
+            # Adjust remaining plan if applicable
+            adjusted_weeks = None
+            if remaining_weeks and next_week:
+                adj_prompt = PLAN_ADJUSTMENT_PROMPT.format(
+                    platform       = platform,
+                    niche          = niche,
+                    week_number    = week_number,
+                    what_posted    = what_posted,
+                    what_performed = what_performed,
+                    dms_replies    = dms_replies,
+                    remaining_weeks= json.dumps(remaining_weeks, indent=2),
+                    next_week      = next_week,
+                )
+                try:
+                    adj_raw        = call_gemini([], adj_prompt)
+                    adjusted_weeks = parse_json_response(adj_raw)
+                except Exception:
+                    adjusted_weeks = remaining_weeks
+        else:
+            debrief        = demo_debrief(what_performed, dms_replies, week_number or 1)
+            adjusted_weeks = remaining_weeks if remaining_weeks else None
+
+    except Exception as e:
+        log.warning(f"Check-in generation error: {e}")
+        debrief        = demo_debrief(what_performed, dms_replies, week_number or 1)
+        adjusted_weeks = remaining_weeks if remaining_weeks else None
+
+    checkin = Checkin(
+        user_id        = user.id,
+        analysis_id    = analysis_id or None,
+        week_number    = week_number or None,
+        what_posted    = what_posted,
+        what_performed = what_performed,
+        dms_replies    = dms_replies,
+        debrief        = debrief,
+        adjusted_weeks = json.dumps(adjusted_weeks) if adjusted_weeks else None,
+    )
+    db.session.add(checkin)
+    db.session.commit()
+
+    return jsonify({
+        "checkin":  checkin.to_dict(),
+        "analysis": analysis.to_dict() if analysis else None,
+    }), 201
+
+
+@app.route("/api/checkins", methods=["GET"])
+@jwt_required()
+def list_checkins():
+    user     = get_user()
+    checkins = (Checkin.query
+                .filter_by(user_id=user.id)
+                .order_by(Checkin.created_at.desc())
+                .limit(50).all())
+    return jsonify({"checkins": [c.to_dict() for c in checkins]})
+
+
+@app.route("/api/analyses/<int:aid>/checkins", methods=["GET"])
+@jwt_required()
+def analysis_checkins(aid):
+    user     = get_user()
+    analysis = Analysis.query.filter_by(id=aid, user_id=user.id).first()
+    if not analysis: return jsonify({"error": "Not found."}), 404
+    return jsonify({"checkins": [c.to_dict() for c in analysis.checkins]})
+
+
+# ---------------------------------------------------------------------------
 # Health
 # ---------------------------------------------------------------------------
 @app.route("/api/health", methods=["GET"])
@@ -595,11 +833,14 @@ def internal(e):
 with app.app_context():
     os.makedirs(UPLOAD_FOLDER, exist_ok=True)
     db.create_all()
+    # Add checkins column to analyses if missing (for existing DBs)
+    try:
+        with db.engine.connect() as conn:
+            conn.execute(db.text("SELECT checkins FROM analyses LIMIT 1"))
+    except Exception:
+        pass  # table doesn't have that — it's a relationship, not a column. Fine.
 
 if __name__ == "__main__":
-    port  = int(os.getenv("PORT", 5002))
-    debug = os.getenv("FLASK_DEBUG", "true").lower() == "true"
-    app.run(host="0.0.0.0", port=port, debug=debug)
     port  = int(os.getenv("PORT", 5002))
     debug = os.getenv("FLASK_DEBUG", "true").lower() == "true"
     app.run(host="0.0.0.0", port=port, debug=debug)
