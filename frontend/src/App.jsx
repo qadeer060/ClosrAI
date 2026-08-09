@@ -958,7 +958,7 @@ function Styles() {
       @import url('https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
 
       *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
-      body{background:#F7F9F7;color:#111827;font-family:'Inter',sans-serif;-webkit-font-smoothing:antialiased;}
+      html,body{background:#F7F9F7;color:#111827;font-family:'Inter',sans-serif;-webkit-font-smoothing:antialiased;height:100%;}
 
       .root{
         --bg:#F7F9F7; --panel:#FFFFFF; --card:#F3F6F3; --card2:#EBF0EB;
@@ -978,7 +978,7 @@ function Styles() {
       .logo-sm{width:26px;height:26px;border-radius:8px;}
 
       /* ---- Auth ---- */
-      .auth-wrap{display:grid;grid-template-columns:1.15fr .85fr;min-height:100vh;}
+      .auth-wrap{display:grid;grid-template-columns:1.15fr .85fr;min-height:100vh;background:#F7F9F7;}
       .auth-left{background:linear-gradient(160deg,#052e16 0%,#064e3b 100%);border-right:1px solid #065f46;padding:52px;display:flex;flex-direction:column;gap:32px;position:relative;overflow:hidden;}
       .auth-logo{display:flex;align-items:center;gap:10px;font-family:'Syne';font-size:20px;font-weight:700;color:#fff;}
       .auth-headline h1{font-family:'Syne';font-size:36px;font-weight:800;line-height:1.2;color:#fff;max-width:480px;}
@@ -995,8 +995,8 @@ function Styles() {
       .fc-2{transform:translateX(0px);}
       .fc-3{transform:translateX(30px);}
 
-     .auth-right{display:flex;align-items:center;justify-content:center;padding:40px;background:#F7F9F7;}
-      .auth-card{width:100%;max-width:380px;background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:28px;box-shadow:var(--shadow-md);}
+      .auth-right{display:flex;align-items:center;justify-content:center;padding:40px;background:#F7F9F7;}
+      .auth-card{width:100%;max-width:380px;background:#FFFFFF;border:1px solid #D1D9D1;border-radius:16px;padding:28px;box-shadow:0 4px 12px rgba(0,0,0,.07),0 2px 4px rgba(0,0,0,.05);}
 
       /* ---- Form ---- */
       .tabs{display:flex;gap:3px;background:var(--card);border-radius:10px;padding:4px;margin-bottom:22px;}
