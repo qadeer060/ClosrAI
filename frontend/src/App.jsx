@@ -995,7 +995,7 @@ function Styles() {
       .fc-2{transform:translateX(0px);}
       .fc-3{transform:translateX(30px);}
 
-      .auth-right{display:flex;align-items:center;justify-content:center;padding:40px;background:var(--bg);}
+     .auth-right{display:flex;align-items:center;justify-content:center;padding:40px;background:#F7F9F7;}
       .auth-card{width:100%;max-width:380px;background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:28px;box-shadow:var(--shadow-md);}
 
       /* ---- Form ---- */
